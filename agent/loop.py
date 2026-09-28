@@ -7,6 +7,7 @@ its own span. Span names and attributes follow the OTel GenAI semantic conventio
 Prompt and response text are never put on spans. Only counts, ids, and outcomes.
 """
 import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -26,6 +27,31 @@ SYSTEM_PROMPT = (
 
 
 FINAL_STOP_REASONS = {"end_turn", "stop_sequence"}
+
+
+log = logging.getLogger(AGENT_NAME)
+
+
+def _part(block) -> dict:
+    """One content block as a GenAI semconv message part. Blocks are SDK objects
+    (from responses) or dicts (tool results we built)."""
+    kind = block["type"] if isinstance(block, dict) else block.type
+    if kind == "text":
+        return {"type": "text", "content": block["text"] if isinstance(block, dict) else block.text}
+    if kind == "tool_use":
+        return {"type": "tool_call", "id": block.id, "name": block.name, "arguments": block.input}
+    if kind == "tool_result":
+        return {"type": "tool_call_response", "id": block["tool_use_id"], "response": block["content"]}
+    return {"type": kind}
+
+
+def _messages_json(messages: list) -> str:
+    view = []
+    for m in messages:
+        content = m["content"]
+        parts = [{"type": "text", "content": content}] if isinstance(content, str) else [_part(b) for b in content]
+        view.append({"role": m["role"], "parts": parts})
+    return json.dumps(view)
 
 
 class AgentLoopLimitError(RuntimeError):
@@ -57,13 +83,16 @@ def _mark_error(span, exc: BaseException) -> None:
 
 class Agent:
     def __init__(self, client, tracer: Tracer, pricing: Pricing, model: str, max_turns: int = 8,
-                 metrics: AgentMetrics | None = None):
+                 metrics: AgentMetrics | None = None, capture_content: bool = False):
         self._client = client
         self._tracer = tracer
         self._pricing = pricing
         self._model = model
         self._max_turns = max_turns
         self._metrics = metrics or AgentMetrics.noop()
+        # Off by default. When on, prompt and answer text go on chat spans; the
+        # Collector strips them before storage (see collector/config.yaml).
+        self._capture_content = capture_content
         self._attrs = {
             "gen_ai.operation.name": "chat",
             "gen_ai.provider.name": PROVIDER,
@@ -88,18 +117,23 @@ class Agent:
                 _mark_error(root, exc)
                 self._record_request(start, totals, outcome=type(exc).__name__)
                 raise
-            self._record_request(start, totals, outcome="ok")
+            self._record_request(start, totals, outcome="ok", turns=result.turns)
             root.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
             root.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
             root.set_attribute("llm.cost.usd", result.cost_usd)
             root.set_attribute("llm.agent.turns", result.turns)
             return result
 
-    def _record_request(self, start: float, totals: dict, outcome: str) -> None:
+    def _record_request(self, start: float, totals: dict, outcome: str, turns: int = 0) -> None:
+        duration = time.perf_counter() - start
         self._metrics.record_request(
-            duration_s=time.perf_counter() - start, cost_usd=totals["cost"],
+            duration_s=duration, cost_usd=totals["cost"],
             attributes={"gen_ai.request.model": self._model, "outcome": outcome},
         )
+        # Runs inside the root span, so the OTel log handler stamps the trace id.
+        log.log(logging.INFO if outcome == "ok" else logging.ERROR, "agent request finished",
+                extra={"outcome": outcome, "cost_usd": totals["cost"], "turns": turns,
+                       "duration_s": round(duration, 3), "model": self._model})
 
     def _loop(self, question: str, totals: dict) -> AgentResult:
         messages = [{"role": "user", "content": question}]
@@ -138,6 +172,11 @@ class Agent:
                 self._metrics.record_chat_error(
                     time.perf_counter() - start, {**self._attrs, "error.type": type(exc).__name__})
                 raise
+            if self._capture_content:
+                span.set_attribute("gen_ai.input.messages", _messages_json(messages))
+                span.set_attribute("gen_ai.output.messages", json.dumps([{
+                    "role": "assistant", "parts": [_part(b) for b in response.content],
+                    "finish_reason": response.stop_reason}]))
             self._metrics.record_chat(
                 time.perf_counter() - start, response.usage.input_tokens,
                 response.usage.output_tokens, {**self._attrs, "gen_ai.response.model": response.model})

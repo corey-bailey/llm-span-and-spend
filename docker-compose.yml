@@ -1,10 +1,49 @@
-# Phase 1: one container runs an OTel Collector, Tempo, Loki, Prometheus, and Grafana.
-# Phase 3 replaces it with separate containers and a hand-written Collector config.
-# Pin the tag to a digest after the first pull (docker images --digests grafana/otel-lgtm).
+# Phase 3 stack: a dedicated OpenTelemetry Collector in front of Tempo, Loki, and Prometheus.
+# (Phases 1-2 used the all-in-one grafana/otel-lgtm image; versions below match its 2026-09 build.)
 services:
-  lgtm:
-    image: grafana/otel-lgtm:latest
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    mem_limit: 512m   # gives memory_limiter's 80% / 20% a real ceiling (cgroup), not the host's RAM
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      TRACE_SAMPLE_PERCENT: ${TRACE_SAMPLE_PERCENT:-10}
+      SLOW_TRACE_MS: ${SLOW_TRACE_MS:-20000}
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"   # Grafana UI (admin / admin); 3001 avoids a local Grafana on 3000
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "4317:4317"     # OTLP gRPC from the agent
+      - "4318:4318"     # OTLP HTTP
+      - "13133:13133"   # health check
+    depends_on: [tempo, loki, prometheus]
+
+  tempo:
+    image: grafana/tempo:3.0.3
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+
+  loki:
+    image: grafana/loki:3.7.8
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"   # 3001 avoids a local Grafana on 3000
+    depends_on: [tempo, loki, prometheus]

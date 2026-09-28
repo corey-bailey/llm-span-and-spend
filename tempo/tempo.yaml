@@ -1,0 +1,27 @@
+# Single-binary Tempo 3, local storage. Adapted from grafana/otel-lgtm.
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9096
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+memberlist:
+  bind_addr: [127.0.0.1]
+  bind_port: 7947
+
+querier:
+  frontend_worker:
+    frontend_address: 127.0.0.1:9096
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks

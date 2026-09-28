@@ -64,7 +64,15 @@ def test_connection_error_maps_to_502():
 
 
 def test_build_app_wires_real_dependencies(monkeypatch):
+    import logging
     from agent.app import build_app
+    from agent.loop import AGENT_NAME
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
-    assert TestClient(build_app()).get("/healthz").status_code == 200
+    logger = logging.getLogger(AGENT_NAME)
+    before = list(logger.handlers)
+    try:
+        assert TestClient(build_app()).get("/healthz").status_code == 200
+        assert len(logger.handlers) == len(before) + 1  # OTLP log handler attached
+    finally:
+        logger.handlers[:] = before  # don't leak a live exporter into later tests

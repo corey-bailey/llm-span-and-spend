@@ -11,6 +11,7 @@ from agent.loop import AGENT_NAME, Agent, AgentIncompleteError, AgentLoopLimitEr
 SERVICE_VERSION = "0.1.0"
 DEFAULT_MODEL = "claude-sonnet-5"
 MAX_QUESTION_CHARS = 2000
+CAPTURE_CONTENT_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 
 log = logging.getLogger(AGENT_NAME)
 
@@ -25,6 +26,10 @@ class AskResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     cost_usd: float
+
+
+def capture_content_enabled() -> bool:
+    return os.environ.get(CAPTURE_CONTENT_ENV, "").strip().lower() == "true"
 
 
 def create_app(agent) -> FastAPI:
@@ -62,9 +67,12 @@ def create_app(agent) -> FastAPI:
 def build_app() -> FastAPI:
     """Factory for uvicorn --factory. Kept out of import time so tests need no API key."""
     from agent.pricing import Pricing
-    from agent.telemetry import init_metrics, init_tracing
+    from agent.telemetry import init_logging, init_metrics, init_tracing
+
+    init_logging(AGENT_NAME, SERVICE_VERSION)
 
     agent = Agent(client=anthropic.Anthropic(), tracer=init_tracing(AGENT_NAME, SERVICE_VERSION),
                   pricing=Pricing.from_file(), model=os.environ.get("AGENT_MODEL", DEFAULT_MODEL),
-                  metrics=init_metrics(AGENT_NAME, SERVICE_VERSION))
+                  metrics=init_metrics(AGENT_NAME, SERVICE_VERSION),
+                  capture_content=capture_content_enabled())
     return create_app(agent)

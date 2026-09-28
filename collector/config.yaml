@@ -1,0 +1,107 @@
+# OpenTelemetry Collector for the catalog agent.
+#
+# Traces run through two pipelines joined by the forward connector:
+#   traces/in   every span: strip GenAI content, feed span_metrics (RED metrics from 100% of spans)
+#   traces/out  tail sampling, then Tempo (keep errors and slow traces, a sample of the rest)
+# span_metrics sits before sampling on purpose. Sampled-out traces still count in the metrics.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  # Defense in depth. The app captures prompt and answer text only when
+  # OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true; nothing stores it either way.
+  attributes/strip_genai_content:
+    actions:
+      - key: gen_ai.input.messages
+        action: delete
+      - key: gen_ai.output.messages
+        action: delete
+      - key: gen_ai.system_instructions
+        action: delete
+
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: keep-slow
+        type: latency
+        latency:
+          threshold_ms: ${env:SLOW_TRACE_MS:-20000}
+      - name: sample-the-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:TRACE_SAMPLE_PERCENT:-10}
+
+  batch: {}
+
+connectors:
+  forward: {}
+  span_metrics:
+    histogram:
+      explicit:
+        buckets: [100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 20s, 40s]
+    dimensions:
+      - name: gen_ai.operation.name
+      - name: gen_ai.request.model
+    exemplars:
+      enabled: true
+
+exporters:
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlp_http/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+    tls:
+      insecure: true
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces/in:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/strip_genai_content]
+      exporters: [span_metrics, forward]
+    traces/out:
+      receivers: [forward]
+      processors: [tail_sampling, batch]
+      exporters: [otlp_grpc/tempo]
+    metrics:
+      receivers: [otlp, span_metrics]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/strip_genai_content, batch]
+      exporters: [otlp_http/loki]

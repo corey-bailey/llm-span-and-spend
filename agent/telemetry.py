@@ -1,13 +1,19 @@
-"""OTel SDK setup: traces and metrics over OTLP/gRPC to whatever OTEL_EXPORTER_OTLP_ENDPOINT names.
+"""OTel SDK setup: traces, metrics, and logs over OTLP/gRPC to whatever OTEL_EXPORTER_OTLP_ENDPOINT names.
 
 The exporter reads the standard OTEL_* environment variables, so the same code points
 at the all-in-one otel-lgtm container now and a dedicated Collector later.
 """
+import logging
 import socket
 
 from opentelemetry import metrics, trace
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -88,3 +94,14 @@ def init_metrics(service_name: str, service_version: str) -> AgentMetrics:
                              metric_readers=[reader])
     metrics.set_meter_provider(provider)
     return AgentMetrics(metrics.get_meter(service_name, service_version))
+
+
+def init_logging(service_name: str, service_version: str) -> None:
+    """Send the service logger's records over OTLP. Records written inside a span
+    carry its trace id, which is what links a Loki line to its Tempo trace."""
+    provider = LoggerProvider(resource=build_resource(service_name, service_version))
+    provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+    set_logger_provider(provider)
+    logger = logging.getLogger(service_name)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(LoggingHandler(level=logging.INFO, logger_provider=provider))
