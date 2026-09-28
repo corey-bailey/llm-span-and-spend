@@ -1,0 +1,108 @@
+# SLOs for catalog-agent, as code. Tests: slo_test.yml (promtool test rules).
+#
+#   availability  99% of requests end with outcome="ok"        (budget 1%)
+#   latency       95% of requests finish in <= 20.48s          (budget 5%)
+#   window        28 days
+#
+# Alerts follow the multi-window, multi-burn-rate pattern (Google SRE Workbook, ch. 5):
+#   page   when 1h and 5m burn  > 14.4x  (2.1% of the 28-day budget in an hour)
+#   ticket when 6h and 30m burn > 6x     (5.4% of the budget in six hours)
+# 14.4 and 6 are the Workbook's constants, derived for a 30-day window (2% and 5% there).
+# They are kept as-is because readers recognize them; the percentages above are the
+# true figures for 28 days (burn x window_h / 672h).
+# Synthetic traffic from scripts/verify_stack.py (service_version="verify-*") is excluded.
+
+groups:
+  - name: catalog-agent-slo-recording
+    rules:
+      - record: slo:agent_errors:ratio_rate5m
+        expr: |
+          (sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*",outcome!="ok"}[5m])) or vector(0))
+          /
+          sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[5m]))
+      - record: slo:agent_errors:ratio_rate30m
+        expr: |
+          (sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*",outcome!="ok"}[30m])) or vector(0))
+          /
+          sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[30m]))
+      - record: slo:agent_errors:ratio_rate1h
+        expr: |
+          (sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*",outcome!="ok"}[1h])) or vector(0))
+          /
+          sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[1h]))
+      - record: slo:agent_errors:ratio_rate6h
+        expr: |
+          (sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*",outcome!="ok"}[6h])) or vector(0))
+          /
+          sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[6h]))
+      - record: slo:agent_slow:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version!~"verify-.*",le="20.48"}[5m]))
+            /
+            sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[5m]))
+          )
+      - record: slo:agent_slow:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version!~"verify-.*",le="20.48"}[30m]))
+            /
+            sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[30m]))
+          )
+      - record: slo:agent_slow:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version!~"verify-.*",le="20.48"}[1h]))
+            /
+            sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[1h]))
+          )
+      - record: slo:agent_slow:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version!~"verify-.*",le="20.48"}[6h]))
+            /
+            sum(rate(llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version!~"verify-.*"}[6h]))
+          )
+
+  - name: catalog-agent-slo-alerts
+    rules:
+      - alert: AgentAvailabilityBudgetBurnFast
+        expr: slo:agent_errors:ratio_rate1h > (14.4 * 0.01) and slo:agent_errors:ratio_rate5m > (14.4 * 0.01)
+        for: 2m
+        labels: {severity: page, slo: availability}
+        annotations:
+          summary: "catalog-agent is burning its 99% availability budget 14.4x too fast"
+          description: "1h error ratio is {{ $value | humanizePercentage }}; at this rate the 28-day budget is gone in about 2 days."
+
+      - alert: AgentAvailabilityBudgetBurnSlow
+        expr: slo:agent_errors:ratio_rate6h > (6 * 0.01) and slo:agent_errors:ratio_rate30m > (6 * 0.01)
+        for: 15m
+        labels: {severity: ticket, slo: availability}
+        annotations:
+          summary: "catalog-agent is burning its 99% availability budget 6x too fast"
+          description: "6h error ratio is {{ $value | humanizePercentage }}; the 28-day budget runs out early if this continues."
+
+      - alert: AgentLatencyBudgetBurnFast
+        expr: slo:agent_slow:ratio_rate1h > (14.4 * 0.05) and slo:agent_slow:ratio_rate5m > (14.4 * 0.05)
+        for: 2m
+        labels: {severity: page, slo: latency}
+        annotations:
+          summary: "catalog-agent is burning its latency budget 14.4x too fast"
+          description: "In the last hour {{ $value | humanizePercentage }} of requests took longer than 20.48s (budget: 5%)."
+
+      - alert: AgentLatencyBudgetBurnSlow
+        expr: slo:agent_slow:ratio_rate6h > (6 * 0.05) and slo:agent_slow:ratio_rate30m > (6 * 0.05)
+        for: 15m
+        labels: {severity: ticket, slo: latency}
+        annotations:
+          summary: "catalog-agent is burning its latency budget 6x too fast"
+          description: "In the last 6h {{ $value | humanizePercentage }} of requests took longer than 20.48s (budget: 5%)."
+
+      # Cost guardrail, not an SLO. $1/hour keeps a runaway loop well inside the project's $20 cap.
+      - alert: AgentSpendHigh
+        expr: sum(increase(llm_cost_usd_total{service_name="catalog-agent",service_version!~"verify-.*"}[1h])) > 1
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "catalog-agent spent ${{ $value | printf \"%.2f\" }} in the last hour"
+          description: "Model spend is over the $1/hour guardrail. Check request volume and turns per request."

@@ -1,0 +1,118 @@
+# promtool unit tests for slo.yml. Run: make rules-test (see README).
+# 1 request/second = +60 per 1m sample.
+rule_files:
+  - slo.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: all requests failing pages on the availability fast burn
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="AgentIncompleteError"}'
+        values: '0+60x90'
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AgentAvailabilityBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: availability}
+            exp_annotations:
+              summary: "catalog-agent is burning its 99% availability budget 14.4x too fast"
+              description: "1h error ratio is 100%; at this rate the 28-day budget is gone in about 2 days."
+
+  - name: healthy traffic fires nothing
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+60x400'
+      - series: 'llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version="0.1.0",outcome="ok",le="20.48"}'
+        values: '0+60x400'
+      - series: 'llm_cost_usd_total{service_name="catalog-agent",service_version="0.1.0"}'
+        values: '0+0.001x400'
+    alert_rule_test:
+      - {eval_time: 70m, alertname: AgentAvailabilityBudgetBurnFast, exp_alerts: []}
+      - {eval_time: 390m, alertname: AgentAvailabilityBudgetBurnSlow, exp_alerts: []}
+      - {eval_time: 70m, alertname: AgentLatencyBudgetBurnFast, exp_alerts: []}
+      - {eval_time: 70m, alertname: AgentSpendHigh, exp_alerts: []}
+    promql_expr_test:
+      - expr: slo:agent_errors:ratio_rate1h
+        eval_time: 70m
+        exp_samples:
+          - labels: 'slo:agent_errors:ratio_rate1h'
+            value: 0
+
+  - name: synthetic verify traffic does not burn the SLO
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="verify-1a2b3c4d",outcome="AgentIncompleteError"}'
+        values: '0+60x90'
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+60x90'
+    alert_rule_test:
+      - {eval_time: 70m, alertname: AgentAvailabilityBudgetBurnFast, exp_alerts: []}
+
+  - name: 8 percent errors for 6h opens a ticket, not a page
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="RateLimitError"}'
+        values: '0+8x400'
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+92x400'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: AgentAvailabilityBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: availability}
+            exp_annotations:
+              summary: "catalog-agent is burning its 99% availability budget 6x too fast"
+              description: "6h error ratio is 8%; the 28-day budget runs out early if this continues."
+      - {eval_time: 390m, alertname: AgentAvailabilityBudgetBurnFast, exp_alerts: []}
+
+  - name: every request slower than 20.48s pages on the latency fast burn
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+60x90'
+      - series: 'llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version="0.1.0",outcome="ok",le="20.48"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AgentLatencyBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: latency}
+            exp_annotations:
+              summary: "catalog-agent is burning its latency budget 14.4x too fast"
+              description: "In the last hour 100% of requests took longer than 20.48s (budget: 5%)."
+
+  - name: spending over $1 an hour opens a ticket
+    interval: 1m
+    input_series:
+      - series: 'llm_cost_usd_total{service_name="catalog-agent",service_version="0.1.0"}'
+        values: '0+0.05x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AgentSpendHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "catalog-agent spent $3.00 in the last hour"
+              description: "Model spend is over the $1/hour guardrail. Check request volume and turns per request."
+
+  - name: 40 percent of requests slower than 20.48s for 6h opens a latency ticket, not a page
+    interval: 1m
+    input_series:
+      - series: 'llm_agent_request_duration_seconds_count{service_name="catalog-agent",service_version="0.1.0",outcome="ok"}'
+        values: '0+100x400'
+      - series: 'llm_agent_request_duration_seconds_bucket{service_name="catalog-agent",service_version="0.1.0",outcome="ok",le="20.48"}'
+        values: '0+60x400'
+    alert_rule_test:
+      - eval_time: 390m
+        alertname: AgentLatencyBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: latency}
+            exp_annotations:
+              summary: "catalog-agent is burning its latency budget 6x too fast"
+              description: "In the last 6h 40% of requests took longer than 20.48s (budget: 5%)."
+      - {eval_time: 390m, alertname: AgentLatencyBudgetBurnFast, exp_alerts: []}

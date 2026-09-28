@@ -11,9 +11,10 @@ services:
       TRACE_SAMPLE_PERCENT: ${TRACE_SAMPLE_PERCENT:-10}
       SLOW_TRACE_MS: ${SLOW_TRACE_MS:-20000}
     ports:
-      - "4317:4317"     # OTLP gRPC from the agent
-      - "4318:4318"     # OTLP HTTP
-      - "13133:13133"   # health check
+      # All ports bind to loopback: this stack has no auth and is for a local machine only.
+      - "127.0.0.1:4317:4317"     # OTLP gRPC from the agent
+      - "127.0.0.1:4318:4318"     # OTLP HTTP
+      - "127.0.0.1:13133:13133"   # health check
     depends_on: [tempo, loki, prometheus]
 
   tempo:
@@ -36,14 +37,20 @@ services:
       - --enable-feature=exemplar-storage
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
 
   grafana:
     image: grafana/grafana:13.2.2
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}   # set in .env to change
+      # Local demo: open the dashboard with no login and no clicks. Viewers cannot edit.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/catalog-agent.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"   # 3001 avoids a local Grafana on 3000
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"   # loopback only; 3001 avoids a local Grafana on 3000
     depends_on: [tempo, loki, prometheus]

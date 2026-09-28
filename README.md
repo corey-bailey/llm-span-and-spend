@@ -49,6 +49,39 @@ Sends 60 traces through the real agent code with a fake Claude client ($0), then
 errors are always kept, successes are sampled, captured prompt text never reaches Tempo,
 each request's log line links to its trace, and span metrics count all 60 requests.
 
+## SLOs and alerts
+
+| SLO | Target | Budget (28 days) |
+|---|---|---|
+| Availability: requests end with `outcome="ok"` | 99% | 1% |
+| Latency: requests finish in 20.48s or less | 95% | 5% |
+
+`prometheus/rules/slo.yml` records error and slow ratios over 5m, 30m, 1h, and 6h, and
+alerts with the multi-window, multi-burn-rate pattern from the Google SRE Workbook:
+page at 14.4x burn (1h and 5m), ticket at 6x (6h and 30m). A separate guardrail opens a
+ticket when model spend passes $1 an hour. Synthetic traffic from `verify_stack.py` is
+excluded from every SLO query.
+
+The rules have unit tests:
+
+```bash
+docker run --rm -v "$PWD/prometheus/rules:/rules:ro" --entrypoint promtool \
+  prom/prometheus:v3.14.0 test rules /rules/slo_test.yml
+```
+
+## Dashboard
+
+Grafana opens straight to the dashboard at http://localhost:3001 (read-only, no login).
+It is generated from `scripts/build_dashboard.py`; edit that file, never the JSON:
+
+```bash
+uv run python scripts/build_dashboard.py     # regenerate grafana/dashboards/catalog-agent.json
+uv run python scripts/verify_dashboard.py    # run every panel query against the live stack
+```
+
+Rows: SLOs and firing alerts, traffic and latency (with exemplars that link to traces),
+cost and tokens, and agent behavior from span metrics (model calls per request, tool calls).
+
 ## Prompt capture
 
 Off by default. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` puts prompt and
@@ -86,5 +119,5 @@ Example: average cost per request is
 1. Agent, GenAI spans, all-in-one stack (done)
 2. Token, cost, and latency metrics (done)
 3. Dedicated Collector: span metrics, prompt redaction, tail sampling, logs linked to traces (done)
-4. Dashboards and SLOs as code, burn-rate alerts
+4. Dashboards and SLOs as code, burn-rate alerts (done)
 5. k6 load test at 1, 5, and 20 users: latency, 429s, and dollars per request
