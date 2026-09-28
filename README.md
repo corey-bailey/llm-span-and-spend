@@ -82,6 +82,49 @@ uv run python scripts/verify_dashboard.py    # run every panel query against the
 Rows: SLOs and firing alerts, traffic and latency (with exemplars that link to traces),
 cost and tokens, and agent behavior from span metrics (model calls per request, tool calls).
 
+## Load test
+
+`load/k6-agent.js` runs 1, 5, then 20 concurrent users, 15 requests each. The request
+count is capped by construction (390), so the cost is too.
+
+```bash
+k6 run load/k6-agent.js                              # full run, ~9 minutes, ~$1 on Haiku
+ITERS=1 STAGE_GAP_S=90 k6 run load/k6-agent.js       # smoke, 26 requests
+```
+
+Results, 2026-09-28, `claude-haiku-4-5`, one local agent process:
+
+| Users | Throughput | Median | p95 | Failed | $/request | Model calls/request | Spend rate |
+|---|---|---|---|---|---|---|---|
+| 1 | ~0.26 req/s | 4.1s | 7.1s | 0% | $0.0025 | 2.13 | ~$2/hour |
+| 5 | ~1.5 req/s | 2.9s | 6.2s | 0% | $0.0025 | 2.15 | ~$13/hour |
+| 20 | ~7.6 req/s | 2.2s | 4.9s | 0% | $0.0025 | 2.13 | ~$69/hour |
+
+Throughput is users divided by average latency (k6 users loop with no think time).
+Spend rate is throughput times $0.0025 times 3600.
+
+Total: 390 requests, $0.97 by k6's count and $0.98 by the `llm_cost_usd_total` metric
+(the 1% gap is `increase()` extrapolating to the window edges). No upstream 429s.
+
+What it showed:
+
+- **20 users did not find the limit.** At ~7.6 requests per second latency fell and
+  nothing failed. The knee is higher. The drop in latency under load is unexplained; I
+  have not tested a cause.
+- **Cost scales linearly and is the real constraint.** At the 20-user rate this agent
+  spends about $69 an hour at list price, while still fast. Cost per request did not move
+  with load. `AgentSpendHigh` went from pending to firing after the run (Prometheus
+  `/api/v1/alerts`, and the Firing alerts panel in the screenshot below).
+- **Search is the expensive tool.** Over the run, span metrics counted 431
+  `search_catalog` calls and 113 `calculate_total` calls, about 3.8 to 1. The search tool
+  matches substrings only ("2-person" misses "Two-person"), so the model retries with
+  new wording, and each retry is a paid model call.
+- **The dashboard's 5-minute rate windows flatten short bursts.** The 20-user stage lasted
+  about 40 seconds, so the panels show ~1 request per second and ~$10 an hour, not the
+  real peak. Read peaks from k6; read sustained rates from the dashboard.
+
+![Dashboard during the load test](docs/dashboard-load-test.png)
+
 ## Prompt capture
 
 Off by default. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` puts prompt and
@@ -120,4 +163,4 @@ Example: average cost per request is
 2. Token, cost, and latency metrics (done)
 3. Dedicated Collector: span metrics, prompt redaction, tail sampling, logs linked to traces (done)
 4. Dashboards and SLOs as code, burn-rate alerts (done)
-5. k6 load test at 1, 5, and 20 users: latency, 429s, and dollars per request
+5. k6 load test at 1, 5, and 20 users: latency, 429s, and dollars per request (done)
