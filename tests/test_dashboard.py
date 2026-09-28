@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from scripts.build_dashboard import DASHBOARD_PATH, build
+from scripts.build_dashboard import DASHBOARD_PATH, TRACE_VIEWER_PATH, build, build_trace_viewer
 
 KNOWN_METRICS = {
     "llm_agent_request_duration_seconds_count", "llm_agent_request_duration_seconds_bucket",
@@ -69,3 +69,18 @@ def test_loki_filters_structured_metadata_after_the_pipe():
             if t["datasource"]["uid"] == "loki":
                 selector = t["expr"].split("}")[0]
                 assert "service_version" not in selector, p["title"]
+
+
+def test_trace_viewer_committed_json_matches_generator():
+    assert json.loads(TRACE_VIEWER_PATH.read_text()) == build_trace_viewer(), \
+        "run: uv run python scripts/build_dashboard.py"
+
+
+def test_trace_viewer_renders_the_trace_id_variable_from_tempo():
+    dash = build_trace_viewer()
+    [var] = dash["templating"]["list"]
+    assert var["name"] == "trace_id" and var["type"] == "textbox"
+    [panel] = dash["panels"]
+    assert panel["type"] == "traces"
+    assert panel["targets"][0]["datasource"]["uid"] == "tempo"
+    assert panel["targets"][0]["query"] == "${trace_id}"

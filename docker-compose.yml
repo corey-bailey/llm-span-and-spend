@@ -1,3 +1,5 @@
+name: llm-span-and-spend
+
 # Phase 3 stack: a dedicated OpenTelemetry Collector in front of Tempo, Loki, and Prometheus.
 # (Phases 1-2 used the all-in-one grafana/otel-lgtm image; versions below match its 2026-09 build.)
 services:

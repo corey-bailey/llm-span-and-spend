@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 
 DASHBOARD_PATH = Path(__file__).parent.parent / "grafana" / "dashboards" / "catalog-agent.json"
+TRACE_VIEWER_PATH = DASHBOARD_PATH.with_name("trace-viewer.json")
 SEL = 'service_name="catalog-agent",service_version!~"verify-.*"'
 PROM = {"type": "prometheus", "uid": "prometheus"}
 LOKI = {"type": "loki", "uid": "loki"}
+TEMPO = {"type": "tempo", "uid": "tempo"}
 GRID_WIDTH = 24
 
 REQ_COUNT = f"llm_agent_request_duration_seconds_count{{{SEL}}}"
@@ -154,7 +156,32 @@ def build() -> dict:
     }
 
 
+def build_trace_viewer() -> dict:
+    """One trace as a waterfall, by id. Anonymous viewers cannot open Explore, so this
+    gives them a way to follow a trace_id from a log line or an exemplar."""
+    return {
+        "uid": "trace-viewer",
+        "title": "Trace viewer",
+        "tags": ["llm", "opentelemetry"],
+        "schemaVersion": 41,
+        "version": 1,
+        "editable": True,
+        "time": {"from": "now-24h", "to": "now"},
+        "templating": {"list": [{
+            "name": "trace_id", "label": "Trace ID", "type": "textbox", "query": "",
+            "current": {"text": "", "value": ""}, "hide": 0,
+        }]},
+        "panels": [{
+            "id": 1, "type": "traces", "title": "Trace ${trace_id}", "datasource": TEMPO,
+            "gridPos": {"x": 0, "y": 0, "w": GRID_WIDTH, "h": 22},
+            "targets": [{"datasource": TEMPO, "refId": "A", "queryType": "traceql",
+                         "query": "${trace_id}"}],
+        }],
+    }
+
+
 if __name__ == "__main__":
     DASHBOARD_PATH.parent.mkdir(parents=True, exist_ok=True)
-    DASHBOARD_PATH.write_text(json.dumps(build(), indent=2) + "\n")
-    print(f"wrote {DASHBOARD_PATH}")
+    for path, dash in ((DASHBOARD_PATH, build()), (TRACE_VIEWER_PATH, build_trace_viewer())):
+        path.write_text(json.dumps(dash, indent=2) + "\n")
+        print(f"wrote {path}")

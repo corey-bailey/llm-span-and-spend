@@ -1,5 +1,5 @@
 [project]
-name = "llm-otel-reference"
+name = "llm-span-and-spend"
 version = "0.1.0"
 description = "Reference for observing a Claude tool-using agent with OpenTelemetry and the Grafana LGTM stack"
 requires-python = ">=3.12"

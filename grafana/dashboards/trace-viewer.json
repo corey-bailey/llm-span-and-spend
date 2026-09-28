@@ -1,0 +1,58 @@
+{
+  "uid": "trace-viewer",
+  "title": "Trace viewer",
+  "tags": [
+    "llm",
+    "opentelemetry"
+  ],
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "trace_id",
+        "label": "Trace ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "traces",
+      "title": "Trace ${trace_id}",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "${trace_id}"
+        }
+      ]
+    }
+  ]
+}

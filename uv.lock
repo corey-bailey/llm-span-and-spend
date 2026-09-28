@@ -460,7 +460,7 @@ wheels = [
 ]
 
 [[package]]
-name = "llm-otel-reference"
+name = "llm-span-and-spend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
