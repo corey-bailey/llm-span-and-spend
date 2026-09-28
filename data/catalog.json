@@ -1,0 +1,10 @@
+[
+  {"sku": "TENT-2P", "name": "Two-person backpacking tent", "category": "shelter", "price_usd": 289.00, "weight_g": 1350},
+  {"sku": "TENT-4P", "name": "Four-person car-camping tent", "category": "shelter", "price_usd": 419.00, "weight_g": 5900},
+  {"sku": "BAG-20F", "name": "20F down sleeping bag", "category": "sleep", "price_usd": 349.00, "weight_g": 900},
+  {"sku": "BAG-40F", "name": "40F synthetic sleeping bag", "category": "sleep", "price_usd": 129.00, "weight_g": 1100},
+  {"sku": "PAD-INS", "name": "Insulated sleeping pad", "category": "sleep", "price_usd": 179.00, "weight_g": 480},
+  {"sku": "STOVE-CAN", "name": "Canister stove", "category": "kitchen", "price_usd": 59.00, "weight_g": 85},
+  {"sku": "FILTER-SQ", "name": "Squeeze water filter", "category": "water", "price_usd": 45.00, "weight_g": 85},
+  {"sku": "PACK-55L", "name": "55L backpacking pack", "category": "packs", "price_usd": 259.00, "weight_g": 1450}
+]

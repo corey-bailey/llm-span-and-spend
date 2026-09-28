@@ -1,0 +1,12 @@
+# USD per million tokens, Anthropic first-party API list prices.
+# Read 2026-09-28 from the Claude API model table (cached 2026-06-24).
+# Verify before quoting: https://www.anthropic.com/pricing
+cache_write_multiplier: 1.25   # 5-minute cache write, relative to input price
+cache_read_multiplier: 0.1     # cache hit, relative to input price
+models:
+  claude-sonnet-5:
+    input_per_mtok: 2.00
+    output_per_mtok: 10.00
+  claude-haiku-4-5:
+    input_per_mtok: 1.00
+    output_per_mtok: 5.00

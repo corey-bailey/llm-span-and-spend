@@ -1,0 +1,10 @@
+# Phase 1: one container runs an OTel Collector, Tempo, Loki, Prometheus, and Grafana.
+# Phase 3 replaces it with separate containers and a hand-written Collector config.
+# Pin the tag to a digest after the first pull (docker images --digests grafana/otel-lgtm).
+services:
+  lgtm:
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"   # Grafana UI (admin / admin); 3001 avoids a local Grafana on 3000
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
