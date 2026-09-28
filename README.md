@@ -41,10 +41,23 @@ Tests use a scripted fake Claude client and an in-memory span exporter. No API k
 `agent/pricing.yaml` holds dated list prices. Every chat span carries `llm.cost.usd`; the
 root span carries the request total. An unknown model raises instead of reporting $0.
 
+## Metrics
+
+| Prometheus series | What it answers |
+|---|---|
+| `gen_ai_client_token_usage` (by `gen_ai_token_type`) | Input vs output tokens per model call |
+| `gen_ai_client_operation_duration_seconds` | Latency of each model call, with `error_type` on failure |
+| `llm_agent_request_duration_seconds` (by `outcome`) | End-to-end latency; the SLO input |
+| `llm_agent_request_cost` | Dollar cost per request at list price |
+| `llm_cost_usd_total` (by model) | Running spend, including failed requests that were still billed |
+
+Example: average cost per request is
+`sum(llm_agent_request_cost_sum) / sum(llm_agent_request_cost_count)`.
+
 ## Roadmap
 
 1. Agent, GenAI spans, all-in-one stack (done)
-2. Token, cost, and latency metrics; spanmetrics connector
-3. Dedicated Collector: prompt redaction, tail sampling, logs linked to traces
+2. Token, cost, and latency metrics (done)
+3. Dedicated Collector: spanmetrics connector, prompt redaction, tail sampling, logs linked to traces
 4. Dashboards and SLOs as code, burn-rate alerts
 5. k6 load test at 1, 5, and 20 users: latency, 429s, and dollars per request

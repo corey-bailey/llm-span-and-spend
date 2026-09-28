@@ -7,11 +7,13 @@ its own span. Span names and attributes follow the OTel GenAI semantic conventio
 Prompt and response text are never put on spans. Only counts, ids, and outcomes.
 """
 import json
+import time
 from dataclasses import dataclass
 
 from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer
 
 from agent.pricing import Pricing
+from agent.telemetry import AgentMetrics
 from agent.tools import TOOL_DEFINITIONS, ToolError, run_tool
 
 AGENT_NAME = "catalog-agent"
@@ -54,12 +56,19 @@ def _mark_error(span, exc: BaseException) -> None:
 
 
 class Agent:
-    def __init__(self, client, tracer: Tracer, pricing: Pricing, model: str, max_turns: int = 8):
+    def __init__(self, client, tracer: Tracer, pricing: Pricing, model: str, max_turns: int = 8,
+                 metrics: AgentMetrics | None = None):
         self._client = client
         self._tracer = tracer
         self._pricing = pricing
         self._model = model
         self._max_turns = max_turns
+        self._metrics = metrics or AgentMetrics.noop()
+        self._attrs = {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": PROVIDER,
+            "gen_ai.request.model": model,
+        }
 
     def run(self, question: str) -> AgentResult:
         with self._tracer.start_as_current_span(
@@ -71,20 +80,29 @@ class Agent:
                 "gen_ai.request.model": self._model,
             },
         ) as root:
+            totals = {"in": 0, "out": 0, "cost": 0.0}
+            start = time.perf_counter()
             try:
-                result = self._loop(question)
+                result = self._loop(question, totals)
             except Exception as exc:
                 _mark_error(root, exc)
+                self._record_request(start, totals, outcome=type(exc).__name__)
                 raise
+            self._record_request(start, totals, outcome="ok")
             root.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
             root.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
             root.set_attribute("llm.cost.usd", result.cost_usd)
             root.set_attribute("llm.agent.turns", result.turns)
             return result
 
-    def _loop(self, question: str) -> AgentResult:
+    def _record_request(self, start: float, totals: dict, outcome: str) -> None:
+        self._metrics.record_request(
+            duration_s=time.perf_counter() - start, cost_usd=totals["cost"],
+            attributes={"gen_ai.request.model": self._model, "outcome": outcome},
+        )
+
+    def _loop(self, question: str, totals: dict) -> AgentResult:
         messages = [{"role": "user", "content": question}]
-        totals = {"in": 0, "out": 0, "cost": 0.0}
         for turn in range(1, self._max_turns + 1):
             response = self._chat(messages, totals)
             if response.stop_reason in FINAL_STOP_REASONS:
@@ -109,6 +127,7 @@ class Agent:
                 "gen_ai.request.max_tokens": MAX_TOKENS,
             },
         ) as span:
+            start = time.perf_counter()
             try:
                 response = self._client.messages.create(
                     model=self._model, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT,
@@ -116,7 +135,12 @@ class Agent:
                 )
             except Exception as exc:
                 _mark_error(span, exc)
+                self._metrics.record_chat_error(
+                    time.perf_counter() - start, {**self._attrs, "error.type": type(exc).__name__})
                 raise
+            self._metrics.record_chat(
+                time.perf_counter() - start, response.usage.input_tokens,
+                response.usage.output_tokens, {**self._attrs, "gen_ai.response.model": response.model})
             cost = self._pricing.cost_usd(self._model, response.usage)
             span.set_attribute("gen_ai.response.id", response.id)
             span.set_attribute("gen_ai.response.model", response.model)

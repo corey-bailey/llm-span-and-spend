@@ -62,9 +62,9 @@ def create_app(agent) -> FastAPI:
 def build_app() -> FastAPI:
     """Factory for uvicorn --factory. Kept out of import time so tests need no API key."""
     from agent.pricing import Pricing
-    from agent.telemetry import init_tracing
+    from agent.telemetry import init_metrics, init_tracing
 
-    tracer = init_tracing(AGENT_NAME, SERVICE_VERSION)
-    agent = Agent(client=anthropic.Anthropic(), tracer=tracer, pricing=Pricing.from_file(),
-                  model=os.environ.get("AGENT_MODEL", DEFAULT_MODEL))
+    agent = Agent(client=anthropic.Anthropic(), tracer=init_tracing(AGENT_NAME, SERVICE_VERSION),
+                  pricing=Pricing.from_file(), model=os.environ.get("AGENT_MODEL", DEFAULT_MODEL),
+                  metrics=init_metrics(AGENT_NAME, SERVICE_VERSION))
     return create_app(agent)
